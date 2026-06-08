@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     credentials_dir: str = str(DATA_DIR / "credentials")
 
     ollama_base_url: str = "http://localhost:11434"
-    default_chat_model: str = "llama3.2:3b-instruct-q4_K_M"
-    background_model: str = "phi3:mini-4k-instruct-q4_K_M"
+    default_chat_model: str = "dolphin-phi3:latest"
+    background_model: str = "phi3:mini"
     embed_model: str = "nomic-embed-text"
 
     slack_enabled: bool = False

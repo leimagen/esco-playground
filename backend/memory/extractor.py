@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import uuid
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,19 +13,20 @@ from config import settings
 
 logger = logging.getLogger("esco.memory.extractor")
 
-EXTRACT_PROMPT = """Analiza esta conversación y extrae hechos concretos sobre el USUARIO (no sobre el agente).
-Solo extrae datos que valga la pena recordar en futuras conversaciones.
-Responde SOLO con un array JSON. Máximo 4 hechos. Si no hay nada relevante, responde [].
+EXTRACT_PROMPT = """Read this conversation and extract ONLY concrete, personal facts about the HUMAN USER (not the AI agent).
+Only include facts that would be useful to remember about the user in future conversations.
+Do NOT extract facts about the agent, generic statements, or conversational filler.
+Return ONLY a JSON array. Max 3 facts. If nothing personal and concrete was said, return [].
 
-Formato:
-[
-  {{"subject": "el usuario", "predicate": "sujeto/verbo corto", "object": "dato específico", "confidence": 0.8}}
-]
+Good facts: name, location, job, hobby, preference, goal, project.
+Bad facts: anything about the agent, meta-commentary, generic phrases.
 
-Conversación:
+Each fact: {{"s":"el usuario","p":"verb phrase","o":"specific value","c":0.85}}
+
+Conversation:
 {conversation}
 
-Responde solo el JSON:"""
+JSON only, no markdown:"""
 
 
 async def extract_and_store(agent_id: int, user_content: str, assistant_content: str) -> None:
@@ -42,12 +44,30 @@ async def extract_and_store(agent_id: int, user_content: str, assistant_content:
             response = resp.json()["message"]["content"]
 
         raw = response.strip()
+        # Strip markdown code fences
+        raw = re.sub(r"```(?:json)?\s*", "", raw).strip()
+        # Fix common malformed patterns like `0 end=0.9` → `0.9`
+        raw = re.sub(r'\d+\s+end=(\d+\.?\d*)', r'\1', raw)
+        raw = re.sub(r'"confidence":\s*\d+\s+', '"confidence": 0.8, ', raw)
+
         start = raw.find("[")
         end = raw.rfind("]") + 1
         if start == -1 or end == 0:
             return
 
-        facts_raw = json.loads(raw[start:end])
+        try:
+            facts_raw = json.loads(raw[start:end])
+        except json.JSONDecodeError:
+            # Try to salvage individual objects
+            import re as _re
+            objects = _re.findall(r'\{[^{}]+\}', raw[start:end])
+            facts_raw = []
+            for obj_str in objects:
+                try:
+                    facts_raw.append(json.loads(obj_str))
+                except Exception:
+                    pass
+
         if not isinstance(facts_raw, list) or not facts_raw:
             return
 
@@ -56,10 +76,14 @@ async def extract_and_store(agent_id: int, user_content: str, assistant_content:
         for f in facts_raw[:4]:
             if not isinstance(f, dict):
                 continue
-            subject = str(f.get("subject", ""))
-            predicate = str(f.get("predicate", ""))
-            obj = str(f.get("object", ""))
-            confidence = float(f.get("confidence", 0.8))
+            # Accept both long keys (subject/predicate/object) and short (s/p/o)
+            subject = str(f.get("subject") or f.get("s", "el usuario"))
+            predicate = str(f.get("predicate") or f.get("p", "mencionó"))
+            obj = str(f.get("object") or f.get("o") or f.get("obj", ""))
+            try:
+                confidence = float(f.get("confidence") or f.get("c", 0.8))
+            except (TypeError, ValueError):
+                confidence = 0.8
             if not subject or not obj:
                 continue
 

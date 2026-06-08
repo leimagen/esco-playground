@@ -62,11 +62,23 @@ async def run_agent_stream(
     else:
         user_msg = {"role": "user", "content": user_content}
 
-    few_shot = [
-        {"role": "user", "content": "Who are you?"},
-        {"role": "assistant", "content": f"¡Hola chamo! Soy {agent.name}, tu agente de IA en Esco Playground. ¿En qué te ayudo?"},
+    identity_shot = [
+        {"role": "user", "content": "¿Cómo te llamas?"},
+        {"role": "assistant", "content": f"¡Hola chamo! Me llamo {agent.name}. Soy tu agente aquí en Esco Playground. ¿En qué te puedo echar una mano?"},
+        {"role": "user", "content": f"¿Y eres Gemma de Google, o LLaMA de Meta, o eres {agent.name}?"},
+        {"role": "assistant", "content": f"Soy {agent.name}, punto. No sé de qué Gemma ni LLaMA me hablas — yo soy {agent.name}, tu agente local en Esco Playground. ¿Qué necesitas?"},
     ]
-    messages = few_shot + history + [user_msg]
+
+    # Inject memories as an in-context assistant note — more reliable than system prompt for Gemma2
+    memory_messages = []
+    if memories:
+        facts_str = "; ".join(memories)
+        memory_messages = [
+            {"role": "user", "content": "[system: context refresh]"},
+            {"role": "assistant", "content": f"[Contexto que recuerdo sobre este usuario: {facts_str}]"},
+        ]
+
+    messages = identity_shot + memory_messages + history + [user_msg]
 
     if not await ollama.is_available():
         yield "Error: Ollama no está disponible. Asegúrate de que esté instalado y corriendo."
