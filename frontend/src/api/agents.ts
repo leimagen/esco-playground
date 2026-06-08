@@ -71,3 +71,16 @@ export const agentsApi = {
     await apiClient.delete(`/agents/${id}/avatar`)
   },
 }
+
+export interface InstalledModel {
+  id: string
+  name: string
+  size_gb: number
+  family: string
+  params: string
+}
+
+export async function fetchInstalledModels(): Promise<InstalledModel[]> {
+  const res = await apiClient.get('/settings/installed-models')
+  return res.data
+}

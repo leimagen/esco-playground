@@ -6,6 +6,7 @@ from sqlalchemy import select
 from pydantic import BaseModel
 from typing import Optional
 from database import get_db, Setting, FileWhitelist
+from ollama.client import ollama
 
 logger = logging.getLogger("esco.settings")
 router = APIRouter()
@@ -29,6 +30,21 @@ async def update_settings(payload: dict, db: AsyncSession = Depends(get_db)):
             db.add(Setting(key=key, value=json.dumps(value)))
     await db.commit()
     return {"status": "updated"}
+
+
+@router.get("/settings/installed-models")
+async def get_installed_models():
+    models = await ollama.list_models()
+    return [
+        {
+            "id": m["name"],
+            "name": m["name"],
+            "size_gb": round(m.get("size", 0) / 1e9, 1),
+            "family": m.get("details", {}).get("family", ""),
+            "params": m.get("details", {}).get("parameter_size", ""),
+        }
+        for m in models
+    ]
 
 
 class WhitelistEntry(BaseModel):

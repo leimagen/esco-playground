@@ -1,9 +1,9 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useAgentStore } from '../../stores/agentStore'
-import { agentsApi, Agent, CreateAgentPayload } from '../../api/agents'
+import { agentsApi, Agent, CreateAgentPayload, fetchInstalledModels, InstalledModel } from '../../api/agents'
 import { AgentAvatar } from '../shared/AgentAvatar'
 import { MemoryManager } from './MemoryManager'
-import { Plus, Trash2, Edit2, Check, X, Brain, Camera, XCircle } from 'lucide-react'
+import { Plus, Trash2, Edit2, Check, X, Brain, Camera, XCircle, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 
 const ACCENT_COLORS = [
@@ -11,22 +11,13 @@ const ACCENT_COLORS = [
   '#5c9bd4', '#7dbd8a', '#bd7d5c', '#bd5cb5',
 ]
 
-const DEFAULT_MODELS = [
-  'llama3.2:latest',
-  'qwen2.5:3b',
-  'phi3:mini',
-  'cosix:latest',
-  'mistral:7b-instruct-q4_K_M',
-  'llava:7b-v1.6-mistral-q4_K_M',
-  'dolphin-mistral:7b-v2.8-q4_K_M',
-  'nous-hermes2:10.7b-solar-q4_K_M',
-]
+// Models known to accept custom personas/roleplay
+const ROLEPLAY_TAGS = ['dolphin', 'hermes', 'openhermes', 'nous', 'wizard', 'uncensored']
 
-const ROLEPLAY_MODELS = new Set([
-  'dolphin-mistral:7b-v2.8-q4_K_M',
-  'nous-hermes2:10.7b-solar-q4_K_M',
-  'cosix:latest',
-])
+function isRoleplayModel(name: string): boolean {
+  const lower = name.toLowerCase()
+  return ROLEPLAY_TAGS.some(t => lower.includes(t))
+}
 
 function AvatarUploader({ agent, onChanged }: { agent: Agent; onChanged: (a: Agent) => void }) {
   const fileRef = useRef<HTMLInputElement>(null)
@@ -106,16 +97,28 @@ function AgentForm({
   onCancel: () => void
 }) {
   const [name, setName] = useState(initial?.name ?? '')
-  const [persona, setPersona] = useState(
-    initial?.persona ??
-      'Eres un asistente inteligente y directo. Ayudas con todo tipo de tareas con claridad y sin rodeos.'
-  )
-  const [model, setModel] = useState(initial?.model_id ?? DEFAULT_MODELS[0])
+  const [persona, setPersona] = useState(initial?.persona ?? '')
+  const [model, setModel] = useState(initial?.model_id ?? '')
   const [color, setColor] = useState(initial?.color ?? ACCENT_COLORS[0])
   const [vision, setVision] = useState(initial?.vision ?? false)
   const [saving, setSaving] = useState(false)
+  const [installedModels, setInstalledModels] = useState<InstalledModel[]>([])
+  const [loadingModels, setLoadingModels] = useState(true)
   const { agents, updateAgent } = useAgentStore()
   const liveAgent = agentId ? agents.find((a) => a.id === agentId) : undefined
+
+  useEffect(() => {
+    fetchInstalledModels()
+      .then((models) => {
+        setInstalledModels(models)
+        // If current model not in list, default to first installed
+        if (models.length > 0 && !model) {
+          const preferred = models.find(m => isRoleplayModel(m.name)) ?? models[0]
+          setModel(preferred.id)
+        }
+      })
+      .finally(() => setLoadingModels(false))
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -146,24 +149,37 @@ function AgentForm({
 
       <div>
         <label className="block text-xs font-medium text-text-secondary mb-1.5">Model</label>
-        <select
-          value={model}
-          onChange={(e) => {
-            setModel(e.target.value)
-            setVision(e.target.value.includes('llava'))
-          }}
-          className="w-full bg-bg-base border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-teal/50"
-        >
-          {DEFAULT_MODELS.map((m) => (
-            <option key={m} value={m}>
-              {m}{ROLEPLAY_MODELS.has(m) ? ' ✦ identity' : ''}
-            </option>
-          ))}
-        </select>
-        {!ROLEPLAY_MODELS.has(model) && (
-          <p className="text-xs text-accent-amber mt-1.5">
-            ⚠ Safety-trained models (Llama, Qwen, Phi) ignore custom names. Use a model marked ✦ identity for full persona support, or install one via the Cookbook.
-          </p>
+        {loadingModels ? (
+          <div className="flex items-center gap-2 text-xs text-text-secondary py-2">
+            <RefreshCw size={12} className="animate-spin" /> Loading installed models...
+          </div>
+        ) : installedModels.length === 0 ? (
+          <p className="text-xs text-accent-rose py-2">Ollama not running or no models installed.</p>
+        ) : (
+          <>
+            <select
+              value={model}
+              onChange={(e) => {
+                setModel(e.target.value)
+                setVision(e.target.value.includes('llava'))
+              }}
+              className="w-full bg-bg-base border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-teal/50"
+            >
+              {installedModels.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}  ({m.size_gb}GB){isRoleplayModel(m.name) ? '  ✦' : ''}
+                </option>
+              ))}
+            </select>
+            {isRoleplayModel(model) ? (
+              <p className="text-xs text-accent-teal mt-1.5">✦ Este modelo acepta identidades personalizadas.</p>
+            ) : (
+              <p className="text-xs text-accent-amber mt-1.5">
+                ⚠ Los modelos safety-trained (Llama, Qwen, Phi) pueden ignorar el nombre del agente.
+                Usa un modelo marcado con ✦ para identidad completa.
+              </p>
+            )}
+          </>
         )}
       </div>
 
