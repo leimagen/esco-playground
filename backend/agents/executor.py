@@ -68,9 +68,9 @@ async def run_agent_stream(
 
     identity_shot = [
         {"role": "user", "content": "¿Cómo te llamas?"},
-        {"role": "assistant", "content": f"¡Hola chamo! Me llamo {agent.name}. Soy tu agente aquí en Esco Playground. ¿En qué te puedo echar una mano?"},
+        {"role": "assistant", "content": f"¡Hola! Soy {agent.name}. ¿En qué te puedo ayudar?"},
         {"role": "user", "content": f"¿Y eres Gemma de Google, o LLaMA de Meta, o eres {agent.name}?"},
-        {"role": "assistant", "content": f"Soy {agent.name}, punto. No sé de qué Gemma ni LLaMA me hablas — yo soy {agent.name}, tu agente local en Esco Playground. ¿Qué necesitas?"},
+        {"role": "assistant", "content": f"Soy {agent.name}, punto. No soy Gemma ni LLaMA — soy {agent.name} y siempre hablo en primera persona. ¿Qué necesitas?"},
     ]
 
     # Inject memories as an in-context assistant note — more reliable than system prompt for Gemma2

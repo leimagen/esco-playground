@@ -196,8 +196,16 @@ async def send_message(thread_id: int, payload: SendPayload):
         else:
             agent_id = payload.agent_id or participants[0].agent_id
 
+        # Strip @AgentName prefix from content before sending to the agent
+        # so the agent doesn't see itself referenced in 3rd person
+        agent_names_in_thread = [a.name for a in thread_agents]
+        clean_content = re.sub(
+            r'^@(' + '|'.join(re.escape(n) for n in agent_names_in_thread) + r')\s*',
+            '', payload.content, flags=re.IGNORECASE
+        ).strip() or payload.content
+
         # Known names for memory extractor
-        known_names = [a.name for a in thread_agents]
+        known_names = agent_names_in_thread
 
         user_msg = Message(
             thread_id=thread_id,
@@ -232,7 +240,7 @@ async def send_message(thread_id: int, payload: SendPayload):
         try:
             async with SessionLocal() as stream_db:
                 async for token in run_agent_stream(
-                    stream_db, agent_id, thread_messages, payload.content,
+                    stream_db, agent_id, thread_messages, clean_content,
                     payload.image_b64,
                     peer_agents=[a for a in thread_agents if a.id != agent_id],
                 ):
@@ -240,6 +248,8 @@ async def send_message(thread_id: int, payload: SendPayload):
                     yield f"data: {json.dumps({'type': 'token', 'data': token})}\n\n"
 
             full_response = "".join(collected)
+            responding_agent = next((a for a in thread_agents if a.id == agent_id), None)
+            responding_name = responding_agent.name if responding_agent else "Agent"
 
             async with SessionLocal() as save_db:
                 await save_db.execute(
@@ -253,14 +263,14 @@ async def send_message(thread_id: int, payload: SendPayload):
                     )
                 await save_db.commit()
 
-            schedule_extraction(agent_id, payload.content, full_response, known_names)
+            schedule_extraction(agent_id, clean_content, full_response, known_names)
 
             yield f"data: {json.dumps({'type': 'done', 'data': 'agent_id:' + str(agent_id)})}\n\n"
 
             # Agent-to-agent: if agent @mentioned a peer, auto-trigger their response
             mentioned_peer = parse_mention(full_response, thread_agents)
             if mentioned_peer and mentioned_peer.id != agent_id:
-                # Load updated messages for the peer's context
+                # Load updated messages for the peer's context (includes the full conversation)
                 async with SessionLocal() as chain_db:
                     chain_msgs_result = await chain_db.execute(
                         select(Message)
@@ -280,10 +290,16 @@ async def send_message(thread_id: int, payload: SendPayload):
                     peer_reply_id = peer_reply_msg.id
                     await chain_db.commit()
 
+                # Give the peer a clear trigger: strip the @mention so peer doesn't see itself in 3rd person
+                peer_trigger = re.sub(
+                    r'@' + re.escape(mentioned_peer.name) + r'\s*',
+                    '', full_response, flags=re.IGNORECASE
+                ).strip() or f"{responding_name} is asking for your input."
+
                 peer_collected = []
                 async with SessionLocal() as peer_db:
                     async for token in run_agent_stream(
-                        peer_db, mentioned_peer.id, chain_msgs, full_response,
+                        peer_db, mentioned_peer.id, chain_msgs, peer_trigger,
                         peer_agents=[a for a in thread_agents if a.id != mentioned_peer.id],
                     ):
                         peer_collected.append(token)
@@ -297,7 +313,7 @@ async def send_message(thread_id: int, payload: SendPayload):
                     )
                     await save_peer_db.commit()
 
-                schedule_extraction(mentioned_peer.id, full_response, peer_response, known_names)
+                schedule_extraction(mentioned_peer.id, peer_trigger, peer_response, known_names)
                 yield f"data: {json.dumps({'type': 'done', 'data': 'agent_id:' + str(mentioned_peer.id)})}\n\n"
 
         except Exception as e:
