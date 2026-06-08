@@ -29,14 +29,16 @@ def build_system_prompt(
 
     group_block = ""
     if peer_agents:
-        peer_names = ", ".join(f"{a.name}" for a in peer_agents)
-        peer_mention_names = ", ".join(f"@{a.name}" for a in peer_agents)
+        peer_names = ", ".join(a.name for a in peer_agents)
+        first_peer = peer_agents[0].name
         group_block = (
             f"\nYou are in a group conversation. Other agents present: {peer_names}.\n"
-            f"Speak always in FIRST PERSON as {agent.name}. Never refer to yourself in third person.\n"
-            f"You may address a peer agent directly by name (e.g. '@{peer_agents[0].name}') when it is natural "
-            f"— to pass them a task, ask their opinion, or build on what they said. "
-            f"Only do this when it genuinely makes sense. Do NOT force it in every reply.\n"
+            f"CRITICAL RULES for group chat:\n"
+            f"- Always speak in FIRST PERSON as {agent.name}. Never refer to yourself in third person.\n"
+            f"- If asked to get input FROM another agent, write '@{first_peer}, [your question]' "
+            f"and let them answer themselves. NEVER fabricate or invent their response.\n"
+            f"- Only @mention a peer when you genuinely need their input. "
+            f"A casual reference ('like Ana said...') does NOT need an @.\n"
         )
 
     return f"""You are roleplaying as {agent.name} inside Esco Playground, a local private AI platform.

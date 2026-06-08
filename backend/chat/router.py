@@ -62,9 +62,38 @@ def thread_to_response(t: Thread, participants: list) -> ThreadResponse:
 
 
 def parse_mention(content: str, agents: list[Agent]) -> Agent | None:
+    """Find first @mention in content."""
     match = re.search(r"@(\w+)", content)
     if not match:
         return None
+    mention_name = match.group(1).lower()
+    for agent in agents:
+        if agent.name.lower() == mention_name or agent.slug.lower() == mention_name:
+            return agent
+    return None
+
+
+# Words that indicate the @mention is a casual reference, not a direct call
+_CASUAL_BEFORE = re.compile(
+    r'(?:de|por|para|con|sobre|a\s+través\s+de|según|hacia|desde|'
+    r'frases?\s+de|respuesta\s+de|palabras?\s+de|parte\s+de|'
+    r'cortesía\s+de|opinión\s+de)\s*$',
+    re.IGNORECASE,
+)
+
+def parse_mention_as_call(content: str, agents: list[Agent]) -> Agent | None:
+    """
+    Only returns an agent if they are being DIRECTLY addressed/called,
+    not just casually referenced (e.g. 'frases de @Ana' → None).
+    """
+    match = re.search(r"@(\w+)", content)
+    if not match:
+        return None
+
+    before = content[:match.start()].rstrip()
+    if _CASUAL_BEFORE.search(before):
+        return None  # casual mention, skip
+
     mention_name = match.group(1).lower()
     for agent in agents:
         if agent.name.lower() == mention_name or agent.slug.lower() == mention_name:
@@ -267,8 +296,8 @@ async def send_message(thread_id: int, payload: SendPayload):
 
             yield f"data: {json.dumps({'type': 'done', 'data': 'agent_id:' + str(agent_id)})}\n\n"
 
-            # Agent-to-agent: if agent @mentioned a peer, auto-trigger their response
-            mentioned_peer = parse_mention(full_response, thread_agents)
+            # Agent-to-agent: only chain if @mention is a direct call, not a casual reference
+            mentioned_peer = parse_mention_as_call(full_response, thread_agents)
             if mentioned_peer and mentioned_peer.id != agent_id:
                 # Load updated messages for the peer's context (includes the full conversation)
                 async with SessionLocal() as chain_db:
