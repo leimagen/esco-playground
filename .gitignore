@@ -1,0 +1,17 @@
+node_modules/
+dist-electron/
+frontend/dist/
+build/
+data/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.egg-info/
+.venv/
+venv/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+Thumbs.db
