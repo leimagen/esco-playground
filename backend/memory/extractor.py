@@ -3,34 +3,42 @@ import json
 import logging
 import re
 import uuid
-from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
-from database import SessionLocal, MemoryFact, Message
+from sqlalchemy import select
+from database import SessionLocal, MemoryFact
 from memory.vector_store import upsert_facts
 import httpx
 from config import settings
 
 logger = logging.getLogger("esco.memory.extractor")
 
-EXTRACT_PROMPT = """Read this conversation and extract ONLY concrete, personal facts about the HUMAN USER (not the AI agent).
-Only include facts that would be useful to remember about the user in future conversations.
-Do NOT extract facts about the agent, generic statements, or conversational filler.
-Return ONLY a JSON array. Max 3 facts. If nothing personal and concrete was said, return [].
+EXTRACT_PROMPT = """Extract concrete, memorable facts from this conversation. Output ONLY a JSON array in English. Max 4 facts. Return [] if nothing memorable.
 
-Good facts: name, location, job, hobby, preference, goal, project.
-Bad facts: anything about the agent, meta-commentary, generic phrases.
+SUBJECT RULES — identify exactly who each fact is about:
+- If a person gives their name, use that name as subject (e.g. "Luis", "María")
+- If the user has not given their name, use "the user"
+- If the conversation is about a specific agent (e.g. David, Ana), use that agent's name
+- If about a third party mentioned, use their name or role
 
-Each fact: {{"s":"el usuario","p":"verb phrase","o":"specific value","c":0.85}}
+Only extract: real names, locations, jobs, skills, hobbies, preferences, ongoing projects, relationships.
+Skip: agent self-descriptions, greetings, meta-conversation, things already obvious from context.
+NEVER use "el usuario" or any Spanish — output must be English only.
+
+Format: [{{"s":"exact subject name","p":"short verb phrase","o":"specific value","c":0.85}}]
 
 Conversation:
 {conversation}
 
-JSON only, no markdown:"""
+JSON array only, no markdown, no explanation:"""
 
 
-async def extract_and_store(agent_id: int, user_content: str, assistant_content: str) -> None:
-    conversation = f"Usuario: {user_content}\nAgente: {assistant_content}"
+async def extract_and_store(
+    agent_id: int,
+    user_content: str,
+    assistant_content: str,
+    known_names: list[str] | None = None,
+) -> None:
+    conversation = f"User: {user_content}\nAgent: {assistant_content}"
     prompt = EXTRACT_PROMPT.format(conversation=conversation)
 
     try:
@@ -46,9 +54,8 @@ async def extract_and_store(agent_id: int, user_content: str, assistant_content:
         raw = response.strip()
         # Strip markdown code fences
         raw = re.sub(r"```(?:json)?\s*", "", raw).strip()
-        # Fix common malformed patterns like `0 end=0.9` → `0.9`
-        raw = re.sub(r'\d+\s+end=(\d+\.?\d*)', r'\1', raw)
-        raw = re.sub(r'"confidence":\s*\d+\s+', '"confidence": 0.8, ', raw)
+        # Fix common malformed patterns
+        raw = re.sub(r'"confidence":\s*\d+\s+\S+\s*(\d+\.?\d*)', r'"confidence": \1', raw)
 
         start = raw.find("[")
         end = raw.rfind("]") + 1
@@ -58,9 +65,7 @@ async def extract_and_store(agent_id: int, user_content: str, assistant_content:
         try:
             facts_raw = json.loads(raw[start:end])
         except json.JSONDecodeError:
-            # Try to salvage individual objects
-            import re as _re
-            objects = _re.findall(r'\{[^{}]+\}', raw[start:end])
+            objects = re.findall(r'\{[^{}]+\}', raw[start:end])
             facts_raw = []
             for obj_str in objects:
                 try:
@@ -71,21 +76,39 @@ async def extract_and_store(agent_id: int, user_content: str, assistant_content:
         if not isinstance(facts_raw, list) or not facts_raw:
             return
 
+        # Build a set of known agent names to validate subjects
+        known_lower = {n.lower() for n in (known_names or [])}
+        GENERIC_SUBJECTS = {"el usuario", "the user", "user", "usuario", "the agent", "the assistant"}
+
         chroma_facts = []
         db_facts = []
         for f in facts_raw[:4]:
             if not isinstance(f, dict):
                 continue
-            # Accept both long keys (subject/predicate/object) and short (s/p/o)
-            subject = str(f.get("subject") or f.get("s", "el usuario"))
-            predicate = str(f.get("predicate") or f.get("p", "mencionó"))
-            obj = str(f.get("object") or f.get("o") or f.get("obj", ""))
+            subject = str(f.get("s") or f.get("subject", "the user")).strip()
+            predicate = str(f.get("p") or f.get("predicate", "mentioned")).strip()
+
+            raw_obj = f.get("o") or f.get("object") or f.get("obj", "")
+            # Reject boolean/null objects (model hallucination)
+            if isinstance(raw_obj, bool) or raw_obj is None:
+                continue
+            obj = str(raw_obj).strip()
+
             try:
-                confidence = float(f.get("confidence") or f.get("c", 0.8))
+                confidence = float(f.get("c") or f.get("confidence", 0.8))
             except (TypeError, ValueError):
                 confidence = 0.8
-            if not subject or not obj:
+
+            if not subject or not obj or len(obj) < 2 or obj.lower() in ("true", "false", "null", "none"):
                 continue
+
+            # If predicate is very long and contains the object info, split it
+            if len(predicate) > 60:
+                predicate = predicate[:60].rsplit(" ", 1)[0]
+
+            # Normalize generic subjects to "the user" (English)
+            if subject.lower() in GENERIC_SUBJECTS:
+                subject = "the user"
 
             chroma_id = f"agent{agent_id}_{uuid.uuid4().hex[:12]}"
             chroma_facts.append({
@@ -110,7 +133,7 @@ async def extract_and_store(agent_id: int, user_content: str, assistant_content:
                 for fact in db_facts:
                     db.add(fact)
                 await db.commit()
-            logger.info(f"Stored {len(chroma_facts)} memory facts for agent {agent_id}")
+            logger.info(f"Stored {len(chroma_facts)} facts for agent {agent_id}: {[(f['subject'], f['object']) for f in chroma_facts]}")
 
     except json.JSONDecodeError:
         pass
@@ -118,5 +141,12 @@ async def extract_and_store(agent_id: int, user_content: str, assistant_content:
         logger.warning(f"Memory extraction error for agent {agent_id}: {e}")
 
 
-def schedule_extraction(agent_id: int, user_content: str, assistant_content: str) -> None:
-    asyncio.create_task(extract_and_store(agent_id, user_content, assistant_content))
+def schedule_extraction(
+    agent_id: int,
+    user_content: str,
+    assistant_content: str,
+    known_names: list[str] | None = None,
+) -> None:
+    asyncio.create_task(
+        extract_and_store(agent_id, user_content, assistant_content, known_names)
+    )

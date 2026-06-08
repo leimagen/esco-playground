@@ -62,8 +62,8 @@ export const chatApi = {
 export function createMessageStream(
   threadId: number,
   payload: SendMessagePayload,
-  onToken: (token: string) => void,
-  onDone: () => void,
+  onToken: (token: string, agentId?: number) => void,
+  onDone: (agentId?: number) => void,
   onError: (err: string) => void,
   onToolCall?: (data: unknown) => void
 ): () => void {
@@ -102,8 +102,9 @@ export function createMessageStream(
 
           try {
             const event = JSON.parse(raw)
-            if (event.type === 'token') onToken(event.data)
-            else if (event.type === 'done') onDone()
+            const agentId = event.agent_id ?? undefined
+            if (event.type === 'token') onToken(event.data, agentId)
+            else if (event.type === 'done') onDone(agentId)
             else if (event.type === 'error') onError(event.data)
             else if (event.type === 'tool_call') onToolCall?.(event.data)
           } catch {

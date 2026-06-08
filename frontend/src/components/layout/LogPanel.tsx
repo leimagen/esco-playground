@@ -21,7 +21,7 @@ export function LogPanel() {
           <X size={12} />
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto p-2 font-mono text-xs text-text-secondary leading-relaxed">
+      <div className="selectable flex-1 overflow-y-auto p-2 font-mono text-xs text-text-secondary leading-relaxed">
         {backendLogs.length === 0 && (
           <span className="text-text-secondary/50">Waiting for services...</span>
         )}

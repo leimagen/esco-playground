@@ -21,7 +21,7 @@ export function MessageBubble({ message, agent }: Props) {
               className="rounded-lg mb-1 max-h-48 object-contain border border-border"
             />
           )}
-          <div className="bg-accent-teal/10 border border-accent-teal/20 rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm text-text-primary">
+          <div className="selectable bg-accent-teal/10 border border-accent-teal/20 rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm text-text-primary">
             {message.content}
           </div>
         </div>
@@ -46,7 +46,7 @@ export function MessageBubble({ message, agent }: Props) {
             {agent.name}
           </div>
         )}
-        <div className="bg-bg-surface border border-border rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm text-text-primary leading-relaxed">
+        <div className="selectable bg-bg-surface border border-border rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm text-text-primary leading-relaxed">
           {message.content || (message.streaming ? '' : '…')}
           {message.streaming && <span className="cursor-blink" />}
         </div>

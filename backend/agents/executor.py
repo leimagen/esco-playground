@@ -1,5 +1,5 @@
 import logging
-from typing import AsyncIterator
+from typing import AsyncIterator, TYPE_CHECKING
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -7,6 +7,9 @@ from database import Agent, Message, AgentSkill
 from agents.system_prompts import build_system_prompt
 from memory.retriever import retrieve_memories
 from ollama.client import ollama
+
+if TYPE_CHECKING:
+    pass
 
 logger = logging.getLogger("esco.executor")
 
@@ -41,6 +44,7 @@ async def run_agent_stream(
     thread_messages: list[Message],
     user_content: str,
     image_b64: str | None = None,
+    peer_agents: list[Agent] | None = None,
 ) -> AsyncIterator[str]:
     agent = await load_agent(db, agent_id)
     if not agent:
@@ -48,7 +52,7 @@ async def run_agent_stream(
         return
 
     memories = retrieve_memories(agent_id, user_content, top_k=5)
-    system = build_system_prompt(agent, agent.skills, memories)
+    system = build_system_prompt(agent, agent.skills, memories, peer_agents=peer_agents or [])
     history = format_history(thread_messages, agent_id)
 
     if image_b64:

@@ -10,11 +10,17 @@
     color: var(--text-primary);
     font-family: 'Inter', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
+    /* Default: UI chrome is not selectable */
     user-select: none;
   }
 
-  input, textarea {
+  /* Text areas the user should be able to copy from */
+  input, textarea,
+  .selectable,
+  .selectable * {
     user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
   }
 }
 

@@ -179,16 +179,25 @@ async def send_message(thread_id: int, payload: SendPayload):
         all_agents_result = await db.execute(select(Agent))
         all_agents = all_agents_result.scalars().all()
 
+        # Build map of all agents in thread
+        part_ids = [p.agent_id for p in participants]
+        thread_agents = [a for a in all_agents if a.id in part_ids]
+        agent_name_map = {a.id: a for a in all_agents}
+
+        # @mention from user routes to specific agent (auto-invites if not in thread)
         mentioned_agent = parse_mention(payload.content, all_agents)
         if mentioned_agent:
-            part_ids = [p.agent_id for p in participants]
             if mentioned_agent.id not in part_ids:
                 db.add(ThreadAgent(thread_id=thread_id, agent_id=mentioned_agent.id))
                 await db.execute(update(Thread).where(Thread.id == thread_id).values(type="group"))
                 await db.commit()
+                thread_agents.append(mentioned_agent)
             agent_id = mentioned_agent.id
         else:
             agent_id = payload.agent_id or participants[0].agent_id
+
+        # Known names for memory extractor
+        known_names = [a.name for a in thread_agents]
 
         user_msg = Message(
             thread_id=thread_id,
@@ -223,7 +232,9 @@ async def send_message(thread_id: int, payload: SendPayload):
         try:
             async with SessionLocal() as stream_db:
                 async for token in run_agent_stream(
-                    stream_db, agent_id, thread_messages, payload.content, payload.image_b64
+                    stream_db, agent_id, thread_messages, payload.content,
+                    payload.image_b64,
+                    peer_agents=[a for a in thread_agents if a.id != agent_id],
                 ):
                     collected.append(token)
                     yield f"data: {json.dumps({'type': 'token', 'data': token})}\n\n"
@@ -242,9 +253,52 @@ async def send_message(thread_id: int, payload: SendPayload):
                     )
                 await save_db.commit()
 
-            schedule_extraction(agent_id, payload.content, full_response)
+            schedule_extraction(agent_id, payload.content, full_response, known_names)
 
             yield f"data: {json.dumps({'type': 'done', 'data': 'agent_id:' + str(agent_id)})}\n\n"
+
+            # Agent-to-agent: if agent @mentioned a peer, auto-trigger their response
+            mentioned_peer = parse_mention(full_response, thread_agents)
+            if mentioned_peer and mentioned_peer.id != agent_id:
+                # Load updated messages for the peer's context
+                async with SessionLocal() as chain_db:
+                    chain_msgs_result = await chain_db.execute(
+                        select(Message)
+                        .where(Message.thread_id == thread_id)
+                        .order_by(Message.created_at.asc())
+                    )
+                    chain_msgs = chain_msgs_result.scalars().all()
+
+                    peer_reply_msg = Message(
+                        thread_id=thread_id,
+                        agent_id=mentioned_peer.id,
+                        role="assistant",
+                        content="",
+                    )
+                    chain_db.add(peer_reply_msg)
+                    await chain_db.flush()
+                    peer_reply_id = peer_reply_msg.id
+                    await chain_db.commit()
+
+                peer_collected = []
+                async with SessionLocal() as peer_db:
+                    async for token in run_agent_stream(
+                        peer_db, mentioned_peer.id, chain_msgs, full_response,
+                        peer_agents=[a for a in thread_agents if a.id != mentioned_peer.id],
+                    ):
+                        peer_collected.append(token)
+                        yield f"data: {json.dumps({'type': 'token', 'data': token, 'agent_id': mentioned_peer.id})}\n\n"
+
+                peer_response = "".join(peer_collected)
+
+                async with SessionLocal() as save_peer_db:
+                    await save_peer_db.execute(
+                        update(Message).where(Message.id == peer_reply_id).values(content=peer_response)
+                    )
+                    await save_peer_db.commit()
+
+                schedule_extraction(mentioned_peer.id, full_response, peer_response, known_names)
+                yield f"data: {json.dumps({'type': 'done', 'data': 'agent_id:' + str(mentioned_peer.id)})}\n\n"
 
         except Exception as e:
             logger.error(f"Stream error: {e}")

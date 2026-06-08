@@ -49,7 +49,7 @@ export function ChatWindow({ threadId }: Props) {
       if (streaming || (!content.trim() && !imageB64)) return
 
       const tempUserId = Date.now()
-      const userMsg: Message = {
+      appendMessage(threadId, {
         id: tempUserId,
         thread_id: threadId,
         agent_id: null,
@@ -57,37 +57,62 @@ export function ChatWindow({ threadId }: Props) {
         content,
         image_b64: imageB64 ?? null,
         created_at: new Date().toISOString(),
-      }
-      appendMessage(threadId, userMsg)
+      })
 
-      const tempAssistantId = tempUserId + 1
-      const assistantMsg: Message = {
-        id: tempAssistantId,
+      // First agent's streaming message
+      const firstTempId = tempUserId + 1
+      appendMessage(threadId, {
+        id: firstTempId,
         thread_id: threadId,
         agent_id: null,
         role: 'assistant',
         content: '',
         created_at: new Date().toISOString(),
         streaming: true,
-      }
-      appendMessage(threadId, assistantMsg)
+      })
       setStreaming(true)
       setError(null)
+
+      // Track the current streaming message temp ID (may change on agent chain)
+      let currentTempId = firstTempId
+      let chainedMessageCreated = false
 
       cancelStreamRef.current = createMessageStream(
         threadId,
         { content, image_b64: imageB64 },
-        (token) => updateStreamingMessage(threadId, tempAssistantId, token),
-        () => {
-          finalizeMessage(threadId, tempAssistantId)
-          setStreaming(false)
-          chatApi.getMessages(threadId).then((msgs) => setMessages(threadId, msgs)).catch(() => {})
-          reloadThreadInfo()
+        (token, agentId) => {
+          updateStreamingMessage(threadId, currentTempId, token)
+        },
+        (agentId) => {
+          // First done — finalize first agent's message
+          finalizeMessage(threadId, currentTempId)
+
+          // If there's a chained agent coming (agent_id in done event means more is coming)
+          // We create a new streaming placeholder for the next agent
+          if (agentId !== undefined && !chainedMessageCreated) {
+            chainedMessageCreated = true
+            const nextTempId = currentTempId + 1000
+            currentTempId = nextTempId
+            appendMessage(threadId, {
+              id: nextTempId,
+              thread_id: threadId,
+              agent_id: agentId,
+              role: 'assistant',
+              content: '',
+              created_at: new Date().toISOString(),
+              streaming: true,
+            })
+          } else {
+            // Final done — reload from DB and stop streaming
+            setStreaming(false)
+            chatApi.getMessages(threadId).then((msgs) => setMessages(threadId, msgs)).catch(() => {})
+            reloadThreadInfo()
+          }
         },
         (err) => {
           setError(err)
           setStreaming(false)
-          finalizeMessage(threadId, tempAssistantId)
+          finalizeMessage(threadId, currentTempId)
         }
       )
     },
