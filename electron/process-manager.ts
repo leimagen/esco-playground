@@ -132,7 +132,7 @@ export class ProcessManager extends EventEmitter {
     const maxAttempts = 60
     for (let i = 0; i < maxAttempts; i++) {
       try {
-        const res = await fetch('http://localhost:8000/api/health', {
+        const res = await fetch('http://127.0.0.1:8000/api/health', {
           signal: AbortSignal.timeout(1000),
         })
         if (res.ok) {
@@ -170,7 +170,7 @@ export class ProcessManager extends EventEmitter {
   async stop() {
     this.log('Shutting down services...')
     try {
-      await fetch('http://localhost:8000/api/shutdown', {
+      await fetch('http://127.0.0.1:8000/api/shutdown', {
         method: 'POST',
         signal: AbortSignal.timeout(2000),
       })
