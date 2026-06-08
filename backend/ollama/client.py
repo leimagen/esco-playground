@@ -9,7 +9,8 @@ logger = logging.getLogger("esco.ollama")
 
 class OllamaClient:
     def __init__(self):
-        self._client = httpx.AsyncClient(base_url=settings.ollama_base_url, timeout=120.0)
+        # Streaming client — used only for generate_stream
+        self._stream_client = httpx.AsyncClient(base_url=settings.ollama_base_url, timeout=120.0)
 
     async def generate_stream(
         self,
@@ -25,8 +26,16 @@ class OllamaClient:
             payload["images"] = images
 
         try:
-            async with self._client.stream("POST", "/api/chat", json=payload) as resp:
-                resp.raise_for_status()
+            async with self._stream_client.stream("POST", "/api/chat", json=payload) as resp:
+                # Read status without touching body — safe inside stream context
+                if resp.status_code >= 400:
+                    await resp.aread()  # consume body so we can read it
+                    error_text = resp.text
+                    raise httpx.HTTPStatusError(
+                        f"HTTP {resp.status_code}: {error_text}",
+                        request=resp.request,
+                        response=resp,
+                    )
                 async for line in resp.aiter_lines():
                     if not line.strip():
                         continue
@@ -40,7 +49,8 @@ class OllamaClient:
                     except json.JSONDecodeError:
                         continue
         except httpx.HTTPStatusError as e:
-            logger.error(f"Ollama HTTP error {e.response.status_code}: {e.response.text}")
+            # e.response.text is safe now (we called aread above before raising)
+            logger.error(f"Ollama HTTP error: {e}")
             raise
         except Exception as e:
             logger.error(f"Ollama stream error: {e}")
@@ -58,27 +68,30 @@ class OllamaClient:
         return "".join(result)
 
     async def embed(self, model: str, text: str) -> list[float]:
-        resp = await self._client.post("/api/embeddings", json={"model": model, "prompt": text})
-        resp.raise_for_status()
-        return resp.json()["embedding"]
+        async with httpx.AsyncClient(base_url=settings.ollama_base_url, timeout=30.0) as client:
+            resp = await client.post("/api/embeddings", json={"model": model, "prompt": text})
+            resp.raise_for_status()
+            return resp.json()["embedding"]
 
     async def list_models(self) -> list[dict]:
         try:
-            resp = await self._client.get("/api/tags")
-            resp.raise_for_status()
-            return resp.json().get("models", [])
+            async with httpx.AsyncClient(base_url=settings.ollama_base_url, timeout=5.0) as client:
+                resp = await client.get("/api/tags")
+                resp.raise_for_status()
+                return resp.json().get("models", [])
         except Exception:
             return []
 
     async def is_available(self) -> bool:
         try:
-            resp = await self._client.get("/api/tags", timeout=2.0)
-            return resp.status_code == 200
+            async with httpx.AsyncClient(base_url=settings.ollama_base_url, timeout=2.0) as client:
+                resp = await client.get("/api/tags")
+                return resp.status_code == 200
         except Exception:
             return False
 
     async def close(self):
-        await self._client.aclose()
+        await self._stream_client.aclose()
 
 
 ollama = OllamaClient()
