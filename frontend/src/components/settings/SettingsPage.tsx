@@ -11,8 +11,8 @@ const ACCENT_COLORS = [
   '#5c9bd4', '#7dbd8a', '#bd7d5c', '#bd5cb5',
 ]
 
-// Models known to accept custom personas/roleplay
-const ROLEPLAY_TAGS = ['dolphin', 'hermes', 'openhermes', 'nous', 'wizard', 'uncensored']
+// Model families that keep a custom persona well in multi-agent chats
+const ROLEPLAY_TAGS = ['dolphin', 'hermes', 'openhermes', 'nous', 'wizard']
 
 function isRoleplayModel(name: string): boolean {
   const lower = name.toLowerCase()
@@ -175,7 +175,7 @@ function AgentForm({
               <p className="text-xs text-accent-teal mt-1.5">✦ Este modelo acepta identidades personalizadas.</p>
             ) : (
               <p className="text-xs text-accent-amber mt-1.5">
-                ⚠ Los modelos safety-trained (Llama, Qwen, Phi) pueden ignorar el nombre del agente.
+                ⚠ Algunos modelos (Llama, Qwen, Phi) tienden a salir del personaje e ignorar el nombre del agente.
                 Usa un modelo marcado con ✦ para identidad completa.
               </p>
             )}
